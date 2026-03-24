@@ -939,7 +939,7 @@ app.get('/matches/new', requireUser, (req, res) => {
                   + '<div style="font-size:9px;color:var(--muted)">L' + h + ' P' + pars[h] + '</div>'
                   + '<input type="number" id="loch_' + sid + '_' + h + '" value="' + pars[h] + '" min="1" max="20" '
                   + 'style="width:100%;padding:3px 1px;text-align:center;font-size:12px;border-radius:6px;border:1px solid var(--line);background:#081321;color:var(--text)" '
-                  + 'onchange="updateGolfTotal(\'' + sid + '\',' + n + ')" /></div>';
+                  + 'onchange="updateGolfTotal(\\'' + sid + '\\',' + n + ')" /></div>';
               }
               html += '</div>';
             });
@@ -950,7 +950,7 @@ app.get('/matches/new', requireUser, (req, res) => {
                 + '<div style="font-size:9px;color:var(--muted)">L' + h + ' P' + pars[h] + '</div>'
                 + '<input type="number" id="loch_' + sid + '_' + h + '" value="' + pars[h] + '" min="1" max="20" '
                 + 'style="width:100%;padding:3px 1px;text-align:center;font-size:12px;border-radius:6px;border:1px solid var(--line);background:#081321;color:var(--text)" '
-                + 'onchange="updateGolfTotal(\'' + sid + '\',' + n + ')" /></div>';
+                + 'onchange="updateGolfTotal(\\'' + sid + '\\',' + n + ')" /></div>';
             }
             html += '</div>';
           }
