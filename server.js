@@ -435,6 +435,33 @@ function getRecentMatches(limit = 20) {
   return matches;
 }
 
+function getMatchById(id) {
+  const match = db.prepare(`
+    SELECT m.id, m.game_type_id AS gameTypeId, m.played_at, m.notes, m.photo_path AS photoPath,
+           gt.name AS gameName, gt.slug AS gameSlug, gt.scoring_mode AS scoringMode,
+           p.name AS createdBy, m.created_by_profile_id AS createdById
+    FROM matches m
+    JOIN game_types gt ON gt.id = m.game_type_id
+    LEFT JOIN profiles p ON p.id = m.created_by_profile_id
+    WHERE m.id = ?
+  `).get(id);
+  if (!match) return null;
+
+  match.sides = db.prepare(`
+    SELECT ms.id, ms.side_name AS sideName, ms.score, ms.is_winner AS isWinner, ms.extra_data AS extraData
+    FROM match_sides ms WHERE ms.match_id = ? ORDER BY ms.id
+  `).all(match.id);
+
+  for (const side of match.sides) {
+    side.profileIds = db.prepare(`
+      SELECT profile_id FROM match_side_members WHERE side_id = ?
+    `).all(side.id).map(r => r.profile_id);
+    side.extraData = side.extraData ? JSON.parse(side.extraData) : null;
+  }
+
+  return match;
+}
+
 function getProfileStats() {
   return db.prepare(`
     SELECT p.id, p.name, p.color,
@@ -757,6 +784,7 @@ app.get('/', requireUser, (req, res) => {
               ${match.sides.map((side) => `<div><span class="${side.isWinner ? 'winner' : ''}">${side.isWinner ? '🏆 ' : ''}${escapeHtml(side.sideName)}</span>: ${escapeHtml(side.memberNames)} — <strong>${side.score}</strong></div>`).join('')}
             </div>
             ${match.notes ? `<div class="helper">${escapeHtml(match.notes)}</div>` : ''}
+            <a href="/matches/${match.id}/edit" class="ghost small" style="justify-self:start;font-size:12px;padding:8px 12px;">Bearbeiten</a>
           </article>
         `).join('') : '<div class="empty">Noch keine Spiele eingetragen.</div>'}
       </section>
@@ -803,6 +831,7 @@ app.get('/matches', requireUser, (req, res) => {
           </div>
           ${match.notes ? `<div class="helper">${escapeHtml(match.notes)}</div>` : ''}
           ${match.photoPath ? `<a href="${escapeHtml(match.photoPath)}" target="_blank" rel="noreferrer"><img class="match-photo" src="${escapeHtml(match.photoPath)}" alt="Matchfoto" /></a>` : ''}
+          <a href="/matches/${match.id}/edit" class="ghost small" style="justify-self:start;font-size:12px;padding:8px 12px;">Bearbeiten</a>
         </article>
       `).join('') : '<div class="empty">Noch keine Spiele vorhanden.</div>'}
     </section>
@@ -942,11 +971,14 @@ app.get('/matches/new', requireUser, (req, res) => {
       function isGolf() { return getSelectedSlug() === 'golf'; }
 
       function renderProfileButtons(sideId) {
-        return '<div class="profile-btn-grid">' + profiles.map(function(p) {
+        var searchHtml = profiles.length > 6
+          ? '<input type="text" class="profile-search" data-side="' + sideId + '" placeholder="Profil suchen..." style="margin-bottom:8px;" />'
+          : '';
+        return searchHtml + '<div class="profile-btn-grid">' + profiles.map(function(p) {
           var avatarStyle = p.avatarPath
             ? 'background-image:url(' + escapeAttr(p.avatarPath) + ');background-size:cover;background-position:center;'
             : 'background:' + escapeAttr(p.color) + ';';
-          return '<button type="button" class="profile-btn" data-profile-id="' + p.id + '" data-side="' + sideId + '">'
+          return '<button type="button" class="profile-btn" data-profile-id="' + p.id + '" data-side="' + sideId + '" data-name="' + escapeAttr(p.name.toLowerCase()) + '">'
             + '<div class="profile-btn-avatar" style="' + avatarStyle + '">'
             + (p.avatarPath ? '' : escapeAttr(p.name.slice(0,2).toUpperCase()))
             + '</div>'
@@ -1200,6 +1232,19 @@ app.get('/matches/new', requireUser, (req, res) => {
         if (btn) { btn.classList.toggle('selected'); return; }
       });
 
+      // Profile search filter
+      document.addEventListener('input', function(e) {
+        if (!e.target.classList.contains('profile-search')) return;
+        var query = e.target.value.toLowerCase();
+        var card = e.target.closest('.side-card') || e.target.parentNode;
+        var btns = card.querySelectorAll('.profile-btn');
+        btns.forEach(function(btn) {
+          var name = btn.dataset.name || '';
+          var isSelected = btn.classList.contains('selected');
+          btn.style.display = (!query || name.indexOf(query) !== -1 || isSelected) ? '' : 'none';
+        });
+      });
+
       // Winner toggle (billard/capsen)
       document.addEventListener('click', function(e) {
         var btn = e.target.closest('.winner-toggle');
@@ -1378,6 +1423,460 @@ app.post('/matches', requireUser, upload.single('photo'), (req, res) => {
   }
 
   redirectWithMessage(res, '/matches', 'Spiel gespeichert.');
+});
+
+// ── Edit match ──────────────────────────────────────────────────────────
+app.get('/matches/:id/edit', requireUser, (req, res) => {
+  const match = getMatchById(Number(req.params.id));
+  if (!match) return redirectWithMessage(res, '/matches', 'Spiel nicht gefunden.');
+
+  const profiles = getProfiles();
+  const gameTypes = getGameTypes();
+
+  const GOLF_PLAETZE = {
+    'Bades Huk (18 Loch, Par 72)': {
+      loecher: 18,
+      par: {1:4,2:5,3:4,4:3,5:4,6:4,7:5,8:4,9:3,10:4,11:4,12:3,13:5,14:4,15:4,16:3,17:5,18:4}
+    },
+    'Eigener Platz': null
+  };
+  const GOLF_MODI = [
+    { id: 'stroke', name: 'Stroke Play', info: 'Gesamtschlaege zaehlen - wenigste gewinnt.' },
+    { id: 'match',  name: 'Match Play',  info: 'Jedes Loch einzeln - wer mehr Loecher gewinnt, siegt.' },
+    { id: 'scramble', name: 'Scramble', info: 'Team spielt vom besten Ball weiter.' },
+    { id: 'stableford', name: 'Stableford', info: 'Punkte statt Schlaege - unter Par gibt Bonuspunkte.' }
+  ];
+  const golfModiInfo = {};
+  GOLF_MODI.forEach(function(m) { golfModiInfo[m.id] = m.info; });
+  const golfId = gameTypes.find(g => g.slug === 'golf')?.id;
+
+  const playedAtLocal = match.played_at
+    ? new Date(new Date(match.played_at).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+    : '';
+
+  const body = `
+    <section class="card">
+      <h2>Spiel bearbeiten</h2>
+      <form method="POST" action="/matches/${match.id}/edit" enctype="multipart/form-data" id="match-form">
+        <label>Spielart
+          <select name="gameTypeId" id="gameTypeId" required>
+            ${gameTypes.map((gt) => `<option value="${gt.id}" data-slug="${gt.slug}" ${gt.id === match.gameTypeId ? 'selected' : ''}>${escapeHtml(gt.name)}</option>`).join('')}
+          </select>
+        </label>
+
+        <label>Datum & Uhrzeit
+          <input type="datetime-local" name="playedAt" required value="${playedAtLocal}" />
+        </label>
+
+        <div id="golf-section" style="display:none; background:#0b1525; border:1px solid var(--line); border-radius:18px; padding:16px;">
+          <div class="eyebrow" style="margin-bottom:10px;">Golf-Optionen</div>
+          <label>Spielmodus
+            <select id="golf-modus" name="golfModus">
+              ${GOLF_MODI.map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('')}
+            </select>
+          </label>
+          <div id="golf-modus-info" class="helper" style="margin-top:4px; padding:8px 10px; background:var(--panel-2); border-radius:10px;"></div>
+          <label style="margin-top:12px;">Golfplatz
+            <select id="golf-platz" name="golfPlatz">
+              ${Object.keys(GOLF_PLAETZE).map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}
+            </select>
+          </label>
+          <div id="golf-platz-info" class="helper" style="margin-top:4px;"></div>
+          <label style="margin-top:12px;">Eingabemodus
+            <select id="golf-eingabe" name="golfEingabe">
+              <option value="gesamt">Gesamt-Score</option>
+              <option value="loch">Loch f\u00fcr Loch</option>
+            </select>
+          </label>
+          <div id="golf-loch-section" style="display:none; margin-top:12px;">
+            <div class="helper" style="margin-bottom:8px;">Par pro Loch (anpassbar)</div>
+            <div id="golf-par-grid" style="display:grid; grid-template-columns:repeat(9,1fr); gap:4px; margin-bottom:12px;"></div>
+            <div id="golf-scores-grid"></div>
+          </div>
+        </div>
+
+        <label>Notizen
+          <textarea name="notes" maxlength="1000" placeholder="z.B. Wetter, besondere Momente ...">${escapeHtml(match.notes || '')}</textarea>
+        </label>
+
+        ${match.photoPath ? `<div style="margin-bottom:8px;"><img class="match-photo" src="${escapeHtml(match.photoPath)}" alt="Matchfoto" style="max-height:200px;width:auto;" /></div>` : ''}
+        <label>Match-Foto ${match.photoPath ? '(ersetzen)' : '(optional)'}
+          <input type="file" name="photo" accept="image/*" />
+        </label>
+
+        <div id="teams-section">
+          <div class="row" style="margin-top:8px;">
+            <h3>Spieler / Teams</h3>
+            <button class="ghost small" type="button" id="add-side">+ Hinzuf\u00fcgen</button>
+          </div>
+          <div class="helper">Beliebige Kombis: 1v1, 2v2, free-for-all.</div>
+          <div id="sides-container" class="grid" style="margin-top:10px;"></div>
+        </div>
+
+        <input type="hidden" name="sidesJson" id="sides-json" />
+        <input type="hidden" name="golfLochJson" id="golf-loch-json" />
+        <button type="submit" style="background:var(--gold);color:#1a1204;font-size:16px;font-weight:800;">\u00c4nderungen speichern</button>
+      </form>
+
+      <form method="POST" action="/matches/${match.id}/delete" style="margin-top:16px;"
+            onsubmit="return confirm('Spiel wirklich l\\u00f6schen? Das kann nicht r\\u00fcckg\\u00e4ngig gemacht werden.');">
+        <button type="submit" style="background:var(--danger);color:white;width:100%;">Spiel l\u00f6schen</button>
+      </form>
+    </section>
+
+    <script>
+      var profiles = ${safeJson(profiles)};
+      var golfId = ${safeJson(golfId)};
+      var GOLF_PLAETZE = ${safeJson(GOLF_PLAETZE)};
+      var GOLF_MODI_INFO = ${safeJson(golfModiInfo)};
+      var existingSides = ${safeJson(match.sides)};
+
+      const sidesContainer = document.getElementById('sides-container');
+      const hiddenInput    = document.getElementById('sides-json');
+      const lochInput      = document.getElementById('golf-loch-json');
+      const form           = document.getElementById('match-form');
+      const addSideButton  = document.getElementById('add-side');
+      const golfSection    = document.getElementById('golf-section');
+      const gameTypeSelect = document.getElementById('gameTypeId');
+      const golfModusEl    = document.getElementById('golf-modus');
+      const golfPlatzEl    = document.getElementById('golf-platz');
+      const golfEingabeEl  = document.getElementById('golf-eingabe');
+      const golfLochSec    = document.getElementById('golf-loch-section');
+      const golfParGrid    = document.getElementById('golf-par-grid');
+      const golfScoresGrid = document.getElementById('golf-scores-grid');
+      let sideCounter = 0;
+      let currentPar = {};
+
+      function escapeAttr(v) {
+        return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+      }
+      function getSelectedSlug() {
+        var opt = gameTypeSelect.options[gameTypeSelect.selectedIndex];
+        return opt ? (opt.dataset.slug || '') : '';
+      }
+      function isGolf() { return getSelectedSlug() === 'golf'; }
+
+      function renderProfileButtons(sideId, selectedIds) {
+        var searchHtml = profiles.length > 6
+          ? '<input type="text" class="profile-search" data-side="' + sideId + '" placeholder="Profil suchen..." style="margin-bottom:8px;" />'
+          : '';
+        return searchHtml + '<div class="profile-btn-grid">' + profiles.map(function(p) {
+          var avatarStyle = p.avatarPath
+            ? 'background-image:url(' + escapeAttr(p.avatarPath) + ');background-size:cover;background-position:center;'
+            : 'background:' + escapeAttr(p.color) + ';';
+          var sel = selectedIds && selectedIds.indexOf(p.id) !== -1 ? ' selected' : '';
+          return '<button type="button" class="profile-btn' + sel + '" data-profile-id="' + p.id + '" data-side="' + sideId + '" data-name="' + escapeAttr(p.name.toLowerCase()) + '">'
+            + '<div class="profile-btn-avatar" style="' + avatarStyle + '">'
+            + (p.avatarPath ? '' : escapeAttr(p.name.slice(0,2).toUpperCase()))
+            + '</div>'
+            + '<span>' + escapeAttr(p.name) + '</span>'
+            + '</button>';
+        }).join('') + '</div>';
+      }
+
+      function scoreInputHtml(sid, existingScore) {
+        var slug = getSelectedSlug();
+        var val = existingScore != null ? existingScore : '';
+        switch(slug) {
+          case 'billard':
+          case 'capsen':
+            var w = Number(val) === 1;
+            var html = '<label>Ergebnis<div style="display:flex;gap:8px;margin-top:6px;">'
+              + '<button type="button" class="ghost small winner-toggle' + (w ? ' active' : '') + '" data-sid="' + sid + '" data-val="1" style="flex:1">Gewonnen</button>'
+              + '<button type="button" class="ghost small winner-toggle' + (!w && val !== '' ? ' active' : '') + '" data-sid="' + sid + '" data-val="0" style="flex:1">Verloren</button>'
+              + '</div><input type="hidden" name="side_score_' + sid + '" value="' + (val !== '' ? val : 0) + '" class="winner-hidden" /></label>';
+            if (slug === 'capsen') {
+              html += '<label>Restbecher (optional)<input type="number" name="side_restbecher_' + sid + '" min="0" max="30" placeholder="Anzahl" /></label>'
+                + '<label>Verl\\u00e4ngerungen (optional)<input type="number" name="side_verlaengerungen_' + sid + '" min="0" max="20" placeholder="Anzahl" /></label>';
+            }
+            return html;
+          case 'fussball_tzt':
+            return '<label>Tore<input type="number" name="side_score_' + sid + '" min="0" placeholder="Tore" value="' + escapeAttr(val) + '" required /></label>';
+          case 'golf':
+            return '<input type="hidden" name="side_score_' + sid + '" value="' + (val || 0) + '" class="golf-score-hidden" data-sid="' + sid + '" />';
+          default:
+            return '<label>Score<input type="number" step="0.01" name="side_score_' + sid + '" placeholder="z.B. 21" value="' + escapeAttr(val) + '" required /></label>';
+        }
+      }
+
+      function sideLabel() {
+        return getSelectedSlug() === 'fussball_tzt' ? 'Team' : 'Spieler';
+      }
+
+      function addSide(defaultName, existingSide) {
+        sideCounter++;
+        var sid = sideCounter;
+        var lbl = defaultName || (existingSide ? existingSide.sideName : sideLabel() + ' ' + sid);
+        var score = existingSide ? existingSide.score : undefined;
+        var profileIds = existingSide ? existingSide.profileIds : [];
+        var card = document.createElement('section');
+        card.className = 'side-card';
+        card.dataset.sideId = String(sid);
+        card.innerHTML = [
+          '<div class="row"><h3>' + escapeAttr(lbl) + '</h3>',
+          '<button class="ghost small" type="button" data-remove-side="' + sid + '">Entfernen</button></div>',
+          '<label>Teamname (optional)<input type="text" name="side_name_' + sid + '" value="' + escapeAttr(existingSide ? existingSide.sideName : '') + '" placeholder="' + escapeAttr(lbl) + '" maxlength="40" /></label>',
+          scoreInputHtml(sid, score),
+          '<div><div class="helper" style="margin-bottom:8px;">Profil(e)</div>' + renderProfileButtons(sid, profileIds) + '</div>'
+        ].join('');
+        sidesContainer.appendChild(card);
+        // Set restbecher/verlaengerungen if they exist
+        if (existingSide && existingSide.extraData) {
+          var rbEl = card.querySelector('[name="side_restbecher_' + sid + '"]');
+          if (rbEl && existingSide.extraData.restbecher != null) rbEl.value = existingSide.extraData.restbecher;
+          var vlEl = card.querySelector('[name="side_verlaengerungen_' + sid + '"]');
+          if (vlEl && existingSide.extraData.verlaengerungen != null) vlEl.value = existingSide.extraData.verlaengerungen;
+        }
+      }
+
+      function updateGolfSection() {
+        var golf = isGolf();
+        golfSection.style.display = golf ? 'block' : 'none';
+        addSideButton.textContent = '+ ' + sideLabel() + ' hinzuf\\u00fcgen';
+        if (golf) { updatePlatzInfo(); updateModusInfo(); updateLochSection(); }
+      }
+      function updateModusInfo() {
+        var info = GOLF_MODI_INFO[golfModusEl.value] || '';
+        document.getElementById('golf-modus-info').textContent = info;
+      }
+      function updatePlatzInfo() {
+        var platz = GOLF_PLAETZE[golfPlatzEl.value];
+        var infoEl = document.getElementById('golf-platz-info');
+        if (platz) {
+          var parTotal = Object.values(platz.par).reduce(function(a,b){return a+b;},0);
+          infoEl.textContent = platz.loecher + ' Loch, Par ' + parTotal;
+          currentPar = platz.par;
+        } else { infoEl.textContent = 'Eigener Platz'; currentPar = {}; }
+        renderParGrid(); renderGolfScores();
+      }
+      function renderParGrid() {
+        var platz = GOLF_PLAETZE[golfPlatzEl.value]; var n = platz ? platz.loecher : 18;
+        golfParGrid.innerHTML = '';
+        for (var h = 1; h <= n; h++) {
+          var par = (currentPar[h] || currentPar[String(h)] || 4);
+          golfParGrid.innerHTML += '<div style="text-align:center"><div style="font-size:10px;color:var(--muted)">L' + h + '</div>'
+            + '<input type="number" id="par_' + h + '" value="' + par + '" min="3" max="5" style="width:100%;padding:4px 2px;text-align:center;font-size:12px;border-radius:8px;border:1px solid var(--line);background:#081321;color:var(--text)" onchange="renderGolfScores()" /></div>';
+        }
+      }
+      function getCurrentPars() {
+        var platz = GOLF_PLAETZE[golfPlatzEl.value]; var n = platz ? platz.loecher : 18; var pars = {};
+        for (var h = 1; h <= n; h++) { var el = document.getElementById('par_' + h); pars[h] = el ? Number(el.value) : 4; }
+        return pars;
+      }
+      function renderGolfScores() { /* simplified for edit - use gesamt mode */ }
+      function updateGolfTotal(sid, n) {
+        var pars = getCurrentPars(); var total = 0; var parTotal = 0;
+        for (var h = 1; h <= n; h++) { var el = document.getElementById('loch_' + sid + '_' + h); if (el) { total += Number(el.value); parTotal += (pars[h] || 4); } }
+        var diff = total - parTotal; var col = diff > 0 ? '#ef4444' : (diff < 0 ? '#22c55e' : 'var(--gold)');
+        var el2 = document.getElementById('golf-total-' + sid);
+        if (el2) el2.innerHTML = '<span style="color:' + col + '">Total: ' + total + ' (' + (diff >= 0 ? '+' : '') + diff + ')</span>';
+        var scoreEl = document.querySelector('[name="side_score_' + sid + '"]'); if (scoreEl) scoreEl.value = total;
+      }
+      function updateLochSection() {
+        var show = isGolf() && golfEingabeEl.value === 'loch';
+        golfLochSec.style.display = show ? 'block' : 'none';
+        if (show) { renderParGrid(); renderGolfScores(); }
+      }
+
+      function collectSides() {
+        return Array.from(document.querySelectorAll('.side-card')).map(function(card) {
+          var sid = card.dataset.sideId;
+          var scoreEl = card.querySelector('[name="side_score_' + sid + '"]');
+          var score = scoreEl ? scoreEl.value : 0;
+          var nameEl = card.querySelector('[name="side_name_' + sid + '"]');
+          var sideName = nameEl && nameEl.value.trim() ? nameEl.value.trim() : (nameEl ? nameEl.placeholder : ('Spieler ' + sid));
+          var rbEl = card.querySelector('[name="side_restbecher_' + sid + '"]');
+          var vlEl = card.querySelector('[name="side_verlaengerungen_' + sid + '"]');
+          return {
+            sideName: sideName, score: score,
+            profileIds: Array.from(card.querySelectorAll('.profile-btn.selected')).map(function(b){ return Number(b.dataset.profileId); }),
+            restbecher: rbEl && rbEl.value !== '' ? Number(rbEl.value) : null,
+            verlaengerungen: vlEl && vlEl.value !== '' ? Number(vlEl.value) : null
+          };
+        });
+      }
+      function collectLochData() { return {}; }
+
+      gameTypeSelect.addEventListener('change', function() {
+        updateGolfSection(); sidesContainer.innerHTML = ''; sideCounter = 0;
+        var lbl = sideLabel(); addSide(lbl + ' 1'); addSide(lbl + ' 2');
+      });
+      golfModusEl.addEventListener('change', updateModusInfo);
+      golfPlatzEl.addEventListener('change', updatePlatzInfo);
+      golfEingabeEl.addEventListener('change', function() { updateLochSection(); });
+      addSideButton.addEventListener('click', function() { addSide(); });
+
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.profile-btn');
+        if (btn) { btn.classList.toggle('selected'); return; }
+      });
+      document.addEventListener('input', function(e) {
+        if (!e.target.classList.contains('profile-search')) return;
+        var query = e.target.value.toLowerCase();
+        var card = e.target.closest('.side-card') || e.target.parentNode;
+        card.querySelectorAll('.profile-btn').forEach(function(btn) {
+          var name = btn.dataset.name || '';
+          btn.style.display = (!query || name.indexOf(query) !== -1 || btn.classList.contains('selected')) ? '' : 'none';
+        });
+      });
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.winner-toggle');
+        if (!btn) return;
+        var sid = btn.dataset.sid; var val = Number(btn.dataset.val);
+        var card = btn.closest('.side-card');
+        var hidden = card.querySelector('.winner-hidden');
+        if (hidden) hidden.value = val;
+        card.querySelectorAll('.winner-toggle').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        if (val === 1) {
+          Array.from(document.querySelectorAll('.side-card')).forEach(function(oc) {
+            if (oc === card) return;
+            var oh = oc.querySelector('.winner-hidden'); if (oh) oh.value = '0';
+            oc.querySelectorAll('.winner-toggle').forEach(function(b) { b.classList.remove('active'); });
+            var lb = oc.querySelector('.winner-toggle[data-val="0"]'); if (lb) lb.classList.add('active');
+          });
+        }
+      });
+      document.addEventListener('click', function(event) {
+        var btn = event.target.closest('[data-remove-side]');
+        if (!btn) return;
+        if (document.querySelectorAll('.side-card').length <= 2) { window.alert('Mindestens zwei Spieler/Teams.'); return; }
+        btn.closest('.side-card').remove();
+      });
+      form.addEventListener('submit', function() {
+        hiddenInput.value = JSON.stringify(collectSides());
+        lochInput.value   = JSON.stringify(collectLochData());
+      });
+
+      // Init: load existing sides
+      updateGolfSection();
+      existingSides.forEach(function(side) { addSide(null, side); });
+    </script>
+  `;
+
+  res.send(layout(req, 'Spiel bearbeiten', body, req.query.msg ? escapeHtml(req.query.msg) : ''));
+});
+
+app.post('/matches/:id/edit', requireUser, upload.single('photo'), (req, res) => {
+  const matchId = Number(req.params.id);
+  const existingMatch = getMatchById(matchId);
+  if (!existingMatch) {
+    removeUploadedFile(req.file);
+    return redirectWithMessage(res, '/matches', 'Spiel nicht gefunden.');
+  }
+
+  let sides;
+  try {
+    sides = JSON.parse(req.body.sidesJson || '[]');
+  } catch (_error) {
+    removeUploadedFile(req.file);
+    return redirectWithMessage(res, `/matches/${matchId}/edit`, 'Team-Daten konnten nicht gelesen werden.');
+  }
+
+  const gameType = db.prepare('SELECT id, scoring_mode AS scoringMode, slug FROM game_types WHERE id = ?').get(Number(req.body.gameTypeId));
+  if (!gameType) {
+    removeUploadedFile(req.file);
+    return redirectWithMessage(res, `/matches/${matchId}/edit`, 'Ung\u00fcltige Spielart.');
+  }
+
+  if (!Array.isArray(sides) || sides.length < 2) {
+    removeUploadedFile(req.file);
+    return redirectWithMessage(res, `/matches/${matchId}/edit`, 'Bitte mindestens zwei Teams/Seiten anlegen.');
+  }
+
+  const usedProfileIds = new Set();
+  const normalizedSides = [];
+
+  for (const [index, side] of sides.entries()) {
+    const sideName = String(side.sideName || '').trim() || `Team ${index + 1}`;
+    const score = Number(side.score);
+    const profileIds = [...new Set((Array.isArray(side.profileIds) ? side.profileIds : []).map(Number).filter(Boolean))];
+
+    if (!Number.isFinite(score)) {
+      removeUploadedFile(req.file);
+      return redirectWithMessage(res, `/matches/${matchId}/edit`, `Score f\u00fcr ${sideName} fehlt oder ist ung\u00fcltig.`);
+    }
+    if (profileIds.length === 0) {
+      removeUploadedFile(req.file);
+      return redirectWithMessage(res, `/matches/${matchId}/edit`, `Bitte mindestens ein Profil f\u00fcr ${sideName} ausw\u00e4hlen.`);
+    }
+    for (const profileId of profileIds) {
+      if (usedProfileIds.has(profileId)) {
+        removeUploadedFile(req.file);
+        return redirectWithMessage(res, `/matches/${matchId}/edit`, 'Ein Profil wurde mehrfach in verschiedenen Teams ausgew\u00e4hlt.');
+      }
+      usedProfileIds.add(profileId);
+    }
+    normalizedSides.push({ sideName, score, profileIds, extraData: side.restbecher != null || side.verlaengerungen != null ? { restbecher: side.restbecher, verlaengerungen: side.verlaengerungen } : null });
+  }
+
+  if (gameType.slug === 'billard' || gameType.slug === 'capsen') {
+    const winnerCount = normalizedSides.filter(s => s.score === 1).length;
+    if (winnerCount !== 1) {
+      removeUploadedFile(req.file);
+      return redirectWithMessage(res, `/matches/${matchId}/edit`, 'Bitte genau einen Gewinner ausw\u00e4hlen.');
+    }
+  }
+
+  const scores = normalizedSides.map((s) => s.score);
+  const bestScore = gameType.scoringMode === 'lower_wins' ? Math.min(...scores) : Math.max(...scores);
+
+  const updateMatch = db.prepare(`UPDATE matches SET game_type_id = ?, played_at = ?, notes = ?, photo_path = COALESCE(?, photo_path) WHERE id = ?`);
+  const deleteSides = db.prepare(`DELETE FROM match_sides WHERE match_id = ?`);
+  const insertSide = db.prepare(`INSERT INTO match_sides (match_id, side_name, score, is_winner, extra_data) VALUES (?, ?, ?, ?, ?)`);
+  const insertSideMember = db.prepare('INSERT INTO match_side_members (side_id, profile_id) VALUES (?, ?)');
+
+  const saveEdit = db.transaction(() => {
+    const photoPath = req.file ? `/uploads/${req.file.filename}` : null;
+    updateMatch.run(
+      gameType.id,
+      new Date(req.body.playedAt).toISOString(),
+      String(req.body.notes || '').trim() || null,
+      photoPath,
+      matchId
+    );
+    // Delete old photo if replaced
+    if (req.file && existingMatch.photoPath) {
+      const oldPath = path.join(__dirname, 'storage', existingMatch.photoPath);
+      try { fs.unlinkSync(oldPath); } catch (_e) { /* ignore */ }
+    }
+    deleteSides.run(matchId);
+    for (const side of normalizedSides) {
+      const sideResult = insertSide.run(
+        matchId, side.sideName, side.score,
+        side.score === bestScore ? 1 : 0,
+        side.extraData ? JSON.stringify(side.extraData) : null
+      );
+      for (const profileId of side.profileIds) {
+        insertSideMember.run(sideResult.lastInsertRowid, profileId);
+      }
+    }
+  });
+
+  try {
+    saveEdit();
+  } catch (error) {
+    removeUploadedFile(req.file);
+    throw error;
+  }
+
+  redirectWithMessage(res, '/matches', 'Spiel aktualisiert.');
+});
+
+// ── Delete match ────────────────────────────────────────────────────────
+app.post('/matches/:id/delete', requireUser, (req, res) => {
+  const matchId = Number(req.params.id);
+  const match = getMatchById(matchId);
+  if (!match) return redirectWithMessage(res, '/matches', 'Spiel nicht gefunden.');
+
+  // Delete photo from disk
+  if (match.photoPath) {
+    const photoFile = path.join(__dirname, 'storage', match.photoPath);
+    try { fs.unlinkSync(photoFile); } catch (_e) { /* ignore */ }
+  }
+
+  db.prepare('DELETE FROM matches WHERE id = ?').run(matchId);
+  redirectWithMessage(res, '/matches', 'Spiel gel\u00f6scht.');
 });
 
 app.get('/leaderboard', requireUser, (req, res) => {
