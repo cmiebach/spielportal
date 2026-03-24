@@ -1,0 +1,7 @@
+node_modules/
+storage/spielportal.db
+storage/uploads/*
+!storage/uploads/.gitkeep
+.env
+server.js.bak
+server.js.patch
