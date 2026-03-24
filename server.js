@@ -19,10 +19,8 @@ const DEFAULT_GAME_TYPES = [
   { slug: 'dart', name: 'Dart', scoringMode: 'higher_wins' },
   { slug: 'billard', name: 'Billard', scoringMode: 'higher_wins' },
   { slug: 'golf', name: 'Golf', scoringMode: 'lower_wins' },
-  { slug: 'tennis', name: 'Tennis', scoringMode: 'higher_wins' },
-  { slug: 'fussball', name: 'Fußball', scoringMode: 'higher_wins' },
-  { slug: 'padel', name: 'Padel', scoringMode: 'higher_wins' },
-  { slug: 'squash', name: 'Squash', scoringMode: 'higher_wins' }
+  { slug: 'fussball_tzt', name: 'Fußball Tor zu Tor', scoringMode: 'higher_wins' },
+  { slug: 'capsen', name: 'Capsen', scoringMode: 'higher_wins' },
 ];
 
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -88,6 +86,13 @@ const insertGameType = db.prepare(`
     is_active = 1
 `);
 DEFAULT_GAME_TYPES.forEach((gameType) => insertGameType.run(gameType));
+db.prepare(`UPDATE game_types SET is_active = 0 WHERE slug IN ('tennis', 'padel', 'squash', 'fussball')`).run();
+
+// Migration: extra_data column for game-specific side data (e.g. Capsen Restbecher/Verlängerungen)
+const columns = db.prepare("PRAGMA table_info(match_sides)").all();
+if (!columns.find(c => c.name === 'extra_data')) {
+  db.exec('ALTER TABLE match_sides ADD COLUMN extra_data TEXT');
+}
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -188,13 +193,34 @@ function nav(req) {
     : `<a class="button ghost small" href="/login">Login</a>`;
 
   return `
-    <nav class="nav">
+    <nav class="desktop-nav">
       <a href="/">Dashboard</a>
       <a href="/matches">Spiele</a>
       <a href="/matches/new">Neues Spiel</a>
       <a href="/leaderboard">Leaderboards</a>
       <a href="/profiles">Profile</a>
       <div class="nav-auth">${authBlock}</div>
+    </nav>
+    <nav class="bottom-nav">
+      <a href="/" class="bnav-item">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span>Home</span>
+      </a>
+      <a href="/matches" class="bnav-item">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        <span>Spiele</span>
+      </a>
+      <a href="/matches/new" class="bnav-item bnav-plus">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+      </a>
+      <a href="/leaderboard" class="bnav-item">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+        <span>Ranking</span>
+      </a>
+      <a href="/profiles" class="bnav-item">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span>Profile</span>
+      </a>
     </nav>
   `;
 }
@@ -218,32 +244,34 @@ function layout(req, title, body, flash = '') {
         --blue: #38bdf8;
         --orange: #fb923c;
         --danger: #ef4444;
+        --gold: #F0B429;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-        background: linear-gradient(180deg, #08101d 0%, #0d1728 100%);
+        background: linear-gradient(180deg, #060d18 0%, #0a1525 100%);
         color: var(--text);
       }
       a { color: inherit; text-decoration: none; }
       .page { max-width: 980px; margin: 0 auto; padding: 18px 14px 48px; }
       .hero { display: grid; gap: 10px; margin: 12px 0 18px; }
-      .eyebrow { color: var(--blue); font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; }
+      .eyebrow { color: var(--gold); font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 700; }
       h1, h2, h3 { margin: 0; }
       .subtle { color: var(--muted); }
-      .nav { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 18px; }
-      .nav a, .button, button {
-        border: 0; border-radius: 14px; padding: 12px 14px;
-        background: var(--green); color: #05110a; font-weight: 700; cursor: pointer;
+      .desktop-nav { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 18px; }
+      .desktop-nav a, .button, button {
+        border: 0; border-radius: 14px; padding: 14px 18px; min-height: 48px;
+        background: var(--gold); color: #1a1204; font-weight: 700; cursor: pointer;
+        font-size: 14px; display: inline-flex; align-items: center; justify-content: center;
       }
-      .nav a:hover, .button:hover, button:hover { filter: brightness(1.04); }
+      .desktop-nav a:hover, .button:hover, button:hover { filter: brightness(1.08); }
       .ghost { background: var(--panel); color: var(--text); border: 1px solid var(--line); }
-      .small { padding: 9px 12px; font-size: 14px; }
+      .small { padding: 12px 14px; min-height: 48px; font-size: 14px; }
       .nav-auth { margin-left: auto; display: flex; gap: 8px; align-items: center; }
       .user-pill {
         display: inline-flex; align-items: center; gap: 8px;
-        padding: 10px 12px; border-radius: 999px;
+        padding: 10px 14px; border-radius: 999px;
         background: var(--panel); border: 1px solid var(--line);
       }
       .dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
@@ -253,11 +281,13 @@ function layout(req, title, body, flash = '') {
       .card {
         background: rgba(16, 28, 47, 0.94); border: 1px solid var(--line);
         border-radius: 20px; padding: 16px; box-shadow: 0 14px 40px rgba(0,0,0,0.2);
+        transition: border-color 0.2s;
       }
+      .card:hover { border-color: rgba(240,180,41,0.25); }
       .card h2, .card h3 { margin-bottom: 12px; }
       .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
       .stat { background: var(--panel-2); border-radius: 18px; border: 1px solid var(--line); padding: 14px; }
-      .stat-value { font-size: 28px; font-weight: 800; color: var(--green); }
+      .stat-value { font-size: 28px; font-weight: 800; color: var(--gold); }
       .stat-label { font-size: 13px; color: var(--muted); }
       .match { display: grid; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--line); }
       .match:last-child { border-bottom: 0; padding-bottom: 0; }
@@ -268,18 +298,18 @@ function layout(req, title, body, flash = '') {
         padding: 7px 10px; border-radius: 999px; font-size: 13px;
         background: #0a1526; border: 1px solid var(--line); color: var(--muted);
       }
-      .tag { background: rgba(56,189,248,0.15); color: #8fdefc; }
+      .tag { background: rgba(240,180,41,0.12); color: #f5d78e; }
       .winner { color: var(--green); font-weight: 800; }
       form { display: grid; gap: 12px; }
       label { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
       input, textarea, select {
         width: 100%; border-radius: 14px; border: 1px solid var(--line);
-        background: #081321; color: var(--text); padding: 12px 14px; font: inherit;
+        background: #081321; color: var(--text); padding: 14px 16px; min-height: 48px; font: inherit;
       }
       textarea { min-height: 100px; resize: vertical; }
       .flash {
         margin-bottom: 14px; padding: 12px 14px; border-radius: 16px;
-        border: 1px solid rgba(251,146,60,0.35); background: rgba(251,146,60,0.12); color: #ffd9b8;
+        border: 1px solid rgba(240,180,41,0.35); background: rgba(240,180,41,0.1); color: #f5d78e;
       }
       .profile-list { display: grid; gap: 10px; }
       .profile-card {
@@ -294,18 +324,61 @@ function layout(req, title, body, flash = '') {
         border: 1px solid var(--line); background: #0b1525;
         border-radius: 18px; padding: 14px; display: grid; gap: 12px;
       }
+      .profile-btn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+      .profile-btn {
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        padding: 12px 8px; border-radius: 14px; background: #09111f;
+        border: 2px solid var(--line); cursor: pointer; min-height: 48px;
+        color: var(--text); font-size: 12px; transition: border-color 0.15s, background 0.15s;
+      }
+      .profile-btn.selected { border-color: var(--gold); background: rgba(240,180,41,0.08); }
+      .profile-btn-avatar {
+        width: 40px; height: 40px; border-radius: 12px;
+        display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #08111d;
+        background-size: cover; background-position: center;
+      }
+      .winner-toggle {
+        transition: background 0.15s, color 0.15s;
+      }
+      .winner-toggle.active { background: var(--gold) !important; color: #1a1204 !important; border-color: var(--gold) !important; }
       .checkbox-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
       .checkbox-pill {
         display: flex; align-items: center; gap: 8px;
-        padding: 10px 12px; border-radius: 14px; background: #09111f; border: 1px solid var(--line);
+        padding: 12px 14px; border-radius: 14px; background: #09111f; border: 1px solid var(--line);
+        min-height: 48px;
       }
       .checkbox-pill input { width: auto; margin: 0; }
       .helper { font-size: 13px; color: var(--muted); }
       .empty { color: var(--muted); padding: 6px 0; }
       img.match-photo { width: 100%; border-radius: 16px; border: 1px solid var(--line); }
+
+      /* Bottom Navigation */
+      .bottom-nav {
+        display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+        background: rgba(16,28,47,0.96); backdrop-filter: blur(12px);
+        border-top: 1px solid var(--line);
+        padding: 6px 0 env(safe-area-inset-bottom, 8px);
+        justify-content: space-around; align-items: center;
+      }
+      .bnav-item {
+        display: flex; flex-direction: column; align-items: center; gap: 2px;
+        font-size: 10px; color: var(--muted); padding: 6px 12px;
+        text-decoration: none; min-width: 48px; min-height: 48px;
+        justify-content: center; background: none; border: none;
+      }
+      .bnav-item:hover, .bnav-item:active { color: var(--gold); }
+      .bnav-plus {
+        background: var(--gold); color: #1a1204; border-radius: 50%;
+        width: 52px; height: 52px; margin-top: -18px; padding: 0;
+        box-shadow: 0 4px 16px rgba(240,180,41,0.3);
+        min-width: 52px;
+      }
+      .bnav-plus:hover, .bnav-plus:active { color: #1a1204; background: var(--gold); filter: brightness(1.1); }
+
       @media (max-width: 640px) {
-        .page { padding: 14px 12px 40px; }
-        .nav-auth { width: 100%; margin-left: 0; justify-content: space-between; }
+        .desktop-nav { display: none; }
+        .bottom-nav { display: flex; }
+        .page { padding: 14px 12px 90px; }
       }
     </style>
   </head>
@@ -634,8 +707,34 @@ app.get('/', requireUser, (req, res) => {
   const matches = getRecentMatches(6);
   const stats = getProfileStats();
   const gameTypes = getGameTypes();
+  const profiles = getProfiles();
 
   const body = `
+    <section class="card" style="margin-bottom:14px; border: 1px solid rgba(240,180,41,0.3);">
+      <div class="row"><h3 style="color:var(--gold);">Schnellerfassung</h3></div>
+      <div class="helper" style="margin-bottom:10px;">1v1 Spiel schnell eintragen</div>
+      <form action="/matches/new" method="GET" style="display:flex; flex-wrap:wrap; gap:10px; align-items:end;">
+        <label style="flex:1;min-width:120px;">Spielart
+          <select name="gameTypeId" required>
+            ${gameTypes.map(gt => `<option value="${gt.id}">${escapeHtml(gt.name)}</option>`).join('')}
+          </select>
+        </label>
+        <label style="flex:1;min-width:100px;">Spieler 1
+          <select name="p1" required>
+            <option value="">---</option>
+            ${profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+          </select>
+        </label>
+        <label style="flex:1;min-width:100px;">Spieler 2
+          <select name="p2" required>
+            <option value="">---</option>
+            ${profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+          </select>
+        </label>
+        <button type="submit" style="min-height:48px;background:var(--gold);color:#1a1204;">Los</button>
+      </form>
+    </section>
+
     <section class="stats">
       <div class="stat"><div class="stat-value">${matches.length}</div><div class="stat-label">Letzte Spiele</div></div>
       <div class="stat"><div class="stat-value">${stats.length}</div><div class="stat-label">Profile</div></div>
@@ -735,14 +834,20 @@ app.get('/matches/new', requireUser, (req, res) => {
 
   const golfId = gameTypes.find(g => g.slug === 'golf')?.id;
 
+  const preselect = {
+    gameTypeId: req.query.gameTypeId || '',
+    p1: req.query.p1 || '',
+    p2: req.query.p2 || ''
+  };
+
   const body = `
     <section class="card">
       <h2>Neues Spiel</h2>
       <form method="POST" action="/matches" enctype="multipart/form-data" id="match-form">
         <label>Spielart
           <select name="gameTypeId" id="gameTypeId" required>
-            <option value="">Bitte wählen</option>
-            ${gameTypes.map((gameType) => `<option value="${gameType.id}" data-slug="${gameType.slug}">${escapeHtml(gameType.name)} (${gameType.scoringMode === 'lower_wins' ? 'niedrigster Score gewinnt' : 'höchster Score gewinnt'})</option>`).join('')}
+            <option value="">Bitte w\u00e4hlen</option>
+            ${gameTypes.map((gameType) => `<option value="${gameType.id}" data-slug="${gameType.slug}" ${String(gameType.id) === String(preselect.gameTypeId) ? 'selected' : ''}>${escapeHtml(gameType.name)}</option>`).join('')}
           </select>
         </label>
 
@@ -752,29 +857,25 @@ app.get('/matches/new', requireUser, (req, res) => {
 
         <!-- GOLF SECTION -->
         <div id="golf-section" style="display:none; background:#0b1525; border:1px solid var(--line); border-radius:18px; padding:16px;">
-          <div class="eyebrow" style="margin-bottom:10px;">⛳ Golf-Optionen</div>
-
+          <div class="eyebrow" style="margin-bottom:10px;">Golf-Optionen</div>
           <label>Spielmodus
             <select id="golf-modus" name="golfModus">
               ${GOLF_MODI.map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('')}
             </select>
           </label>
           <div id="golf-modus-info" class="helper" style="margin-top:4px; padding:8px 10px; background:var(--panel-2); border-radius:10px;"></div>
-
           <label style="margin-top:12px;">Golfplatz
             <select id="golf-platz" name="golfPlatz">
               ${Object.keys(GOLF_PLAETZE).map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}
             </select>
           </label>
           <div id="golf-platz-info" class="helper" style="margin-top:4px;"></div>
-
           <label style="margin-top:12px;">Eingabemodus
             <select id="golf-eingabe" name="golfEingabe">
-              <option value="gesamt">⚡ Gesamt-Score</option>
-              <option value="loch">🔍 Loch für Loch</option>
+              <option value="gesamt">Gesamt-Score</option>
+              <option value="loch">Loch f\u00fcr Loch</option>
             </select>
           </label>
-
           <div id="golf-loch-section" style="display:none; margin-top:12px;">
             <div class="helper" style="margin-bottom:8px;">Par pro Loch (anpassbar)</div>
             <div id="golf-par-grid" style="display:grid; grid-template-columns:repeat(9,1fr); gap:4px; margin-bottom:12px;"></div>
@@ -783,7 +884,7 @@ app.get('/matches/new', requireUser, (req, res) => {
         </div>
 
         <label>Notizen
-          <textarea name="notes" maxlength="1000" placeholder="z.B. Wetter, besondere Momente …"></textarea>
+          <textarea name="notes" maxlength="1000" placeholder="z.B. Wetter, besondere Momente ..."></textarea>
         </label>
 
         <label>Match-Foto (optional)
@@ -793,7 +894,7 @@ app.get('/matches/new', requireUser, (req, res) => {
         <div id="teams-section">
           <div class="row" style="margin-top:8px;">
             <h3>Spieler / Teams</h3>
-            <button class="ghost small" type="button" id="add-side">+ Team hinzufügen</button>
+            <button class="ghost small" type="button" id="add-side">+ Hinzuf\u00fcgen</button>
           </div>
           <div class="helper">Beliebige Kombis: 1v1, 2v2, free-for-all.</div>
           <div id="sides-container" class="grid" style="margin-top:10px;"></div>
@@ -801,7 +902,7 @@ app.get('/matches/new', requireUser, (req, res) => {
 
         <input type="hidden" name="sidesJson" id="sides-json" />
         <input type="hidden" name="golfLochJson" id="golf-loch-json" />
-        <button type="submit">Spiel speichern</button>
+        <button type="submit" style="background:var(--gold);color:#1a1204;font-size:16px;font-weight:800;">Spiel speichern</button>
       </form>
     </section>
 
@@ -810,6 +911,8 @@ app.get('/matches/new', requireUser, (req, res) => {
       var golfId = ${safeJson(golfId)};
       var GOLF_PLAETZE = ${safeJson(GOLF_PLAETZE)};
       var GOLF_MODI_INFO = ${safeJson(golfModiInfo)};
+      var preP1 = ${safeJson(preselect.p1)};
+      var preP2 = ${safeJson(preselect.p2)};
 
       const sidesContainer = document.getElementById('sides-container');
       const hiddenInput    = document.getElementById('sides-json');
@@ -831,59 +934,94 @@ app.get('/matches/new', requireUser, (req, res) => {
         return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
       }
 
-      function isGolf() {
-        const opt = gameTypeSelect.options[gameTypeSelect.selectedIndex];
-        return opt && opt.dataset.slug === 'golf';
+      function getSelectedSlug() {
+        var opt = gameTypeSelect.options[gameTypeSelect.selectedIndex];
+        return opt ? (opt.dataset.slug || '') : '';
       }
 
-      function renderProfileCheckboxes(sideId) {
-        return profiles.map(function(p) {
-          return '<label class="checkbox-pill"><input type="checkbox" value="' + p.id + '" name="side_players_' + sideId + '" /><span>' + escapeAttr(p.name) + '</span></label>';
-        }).join('');
+      function isGolf() { return getSelectedSlug() === 'golf'; }
+
+      function renderProfileButtons(sideId) {
+        return '<div class="profile-btn-grid">' + profiles.map(function(p) {
+          var avatarStyle = p.avatarPath
+            ? 'background-image:url(' + escapeAttr(p.avatarPath) + ');background-size:cover;background-position:center;'
+            : 'background:' + escapeAttr(p.color) + ';';
+          return '<button type="button" class="profile-btn" data-profile-id="' + p.id + '" data-side="' + sideId + '">'
+            + '<div class="profile-btn-avatar" style="' + avatarStyle + '">'
+            + (p.avatarPath ? '' : escapeAttr(p.name.slice(0,2).toUpperCase()))
+            + '</div>'
+            + '<span>' + escapeAttr(p.name) + '</span>'
+            + '</button>';
+        }).join('') + '</div>';
+      }
+
+      function scoreInputHtml(sid) {
+        var slug = getSelectedSlug();
+        switch(slug) {
+          case 'billard':
+            return '<label>Ergebnis<div style="display:flex;gap:8px;margin-top:6px;">'
+              + '<button type="button" class="ghost small winner-toggle" data-sid="' + sid + '" data-val="1" style="flex:1">Gewonnen</button>'
+              + '<button type="button" class="ghost small winner-toggle" data-sid="' + sid + '" data-val="0" style="flex:1">Verloren</button>'
+              + '</div><input type="hidden" name="side_score_' + sid + '" value="0" class="winner-hidden" /></label>';
+          case 'capsen':
+            return '<label>Ergebnis<div style="display:flex;gap:8px;margin-top:6px;">'
+              + '<button type="button" class="ghost small winner-toggle" data-sid="' + sid + '" data-val="1" style="flex:1">Gewonnen</button>'
+              + '<button type="button" class="ghost small winner-toggle" data-sid="' + sid + '" data-val="0" style="flex:1">Verloren</button>'
+              + '</div><input type="hidden" name="side_score_' + sid + '" value="0" class="winner-hidden" /></label>'
+              + '<label>Restbecher (optional)<input type="number" name="side_restbecher_' + sid + '" min="0" max="30" placeholder="Anzahl" /></label>'
+              + '<label>Verl\\u00e4ngerungen (optional)<input type="number" name="side_verlaengerungen_' + sid + '" min="0" max="20" placeholder="Anzahl" /></label>';
+          case 'fussball_tzt':
+            return '<label>Tore<input type="number" name="side_score_' + sid + '" min="0" placeholder="Tore" required /></label>';
+          case 'golf':
+            return '<input type="hidden" name="side_score_' + sid + '" value="0" class="golf-score-hidden" data-sid="' + sid + '" />';
+          default:
+            return '<label>Score<input type="number" step="0.01" name="side_score_' + sid + '" placeholder="z.B. 21" required /></label>';
+        }
+      }
+
+      function sideLabel() {
+        var slug = getSelectedSlug();
+        return (slug === 'fussball_tzt') ? 'Team' : 'Spieler';
       }
 
       function addSide(defaultName) {
         sideCounter++;
-        const sid = sideCounter;
-        const lbl = defaultName || ('Team ' + sid);
-        const card = document.createElement('section');
+        var sid = sideCounter;
+        var lbl = defaultName || (sideLabel() + ' ' + sid);
+        var card = document.createElement('section');
         card.className = 'side-card';
         card.dataset.sideId = String(sid);
-        const showScore = !isGolf();
         card.innerHTML = [
-          '<div class="row"><h3>' + (isGolf() ? 'Spieler ' + sid : 'Team ' + sid) + '</h3>',
+          '<div class="row"><h3>' + escapeAttr(lbl) + '</h3>',
           '<button class="ghost small" type="button" data-remove-side="' + sid + '">Entfernen</button></div>',
-          '<label>Name<input type="text" name="side_name_' + sid + '" value="' + escapeAttr(lbl) + '" maxlength="40" required /></label>',
-          showScore ? '<label>Score<input type="number" step="0.01" name="side_score_' + sid + '" placeholder="z.B. 21" required /></label>' :
-                      '<input type="hidden" name="side_score_' + sid + '" value="0" class="golf-score-hidden" data-sid="' + sid + '" />',
-          '<div><div class="helper" style="margin-bottom:8px;">Profil</div><div class="checkbox-grid">' + renderProfileCheckboxes(sid) + '</div></div>'
+          '<label>Teamname (optional)<input type="text" name="side_name_' + sid + '" placeholder="' + escapeAttr(lbl) + '" maxlength="40" /></label>',
+          scoreInputHtml(sid),
+          '<div><div class="helper" style="margin-bottom:8px;">Profil(e)</div>' + renderProfileButtons(sid) + '</div>'
         ].join('');
         sidesContainer.appendChild(card);
       }
 
       function updateGolfSection() {
-        const golf = isGolf();
+        var golf = isGolf();
         golfSection.style.display = golf ? 'block' : 'none';
-        document.getElementById('add-side').textContent = golf ? '+ Spieler hinzufügen' : '+ Team hinzufügen';
-        updatePlatzInfo();
-        updateModusInfo();
-        updateLochSection();
+        addSideButton.textContent = '+ ' + sideLabel() + ' hinzuf\\u00fcgen';
+        if (golf) { updatePlatzInfo(); updateModusInfo(); updateLochSection(); }
       }
 
       function updateModusInfo() {
-        const info = GOLF_MODI_INFO[golfModusEl.value] || '';
-        document.getElementById('golf-modus-info').textContent = '💡 ' + info;
+        var info = GOLF_MODI_INFO[golfModusEl.value] || '';
+        document.getElementById('golf-modus-info').textContent = info;
       }
 
       function updatePlatzInfo() {
-        const platz = GOLF_PLAETZE[golfPlatzEl.value];
-        const infoEl = document.getElementById('golf-platz-info');
+        var platz = GOLF_PLAETZE[golfPlatzEl.value];
+        var infoEl = document.getElementById('golf-platz-info');
         if (platz) {
-          const parTotal = Object.values(platz.par).reduce(function(a,b){return a+b;},0);
-          infoEl.textContent = '📋 ' + platz.loecher + ' Loch · Par ' + parTotal;
+          var parTotal = Object.values(platz.par).reduce(function(a,b){return a+b;},0);
+          infoEl.textContent = platz.loecher + ' Loch, Par ' + parTotal;
           currentPar = platz.par;
         } else {
-          infoEl.textContent = 'Eigener Platz – Par wird manuell eingegeben.';
+          infoEl.textContent = 'Eigener Platz';
           currentPar = {};
         }
         renderParGrid();
@@ -891,11 +1029,11 @@ app.get('/matches/new', requireUser, (req, res) => {
       }
 
       function renderParGrid() {
-        const platz = GOLF_PLAETZE[golfPlatzEl.value];
-        const n = platz ? platz.loecher : 18;
+        var platz = GOLF_PLAETZE[golfPlatzEl.value];
+        var n = platz ? platz.loecher : 18;
         golfParGrid.innerHTML = '';
         for (var h = 1; h <= n; h++) {
-          const par = (currentPar[h] || currentPar[String(h)] || 4);
+          var par = (currentPar[h] || currentPar[String(h)] || 4);
           golfParGrid.innerHTML += '<div style="text-align:center">'
             + '<div style="font-size:10px;color:var(--muted)">L' + h + '</div>'
             + '<input type="number" id="par_' + h + '" value="' + par + '" min="3" max="5" '
@@ -905,8 +1043,8 @@ app.get('/matches/new', requireUser, (req, res) => {
       }
 
       function getCurrentPars() {
-        const platz = GOLF_PLAETZE[golfPlatzEl.value];
-        const n = platz ? platz.loecher : 18;
+        var platz = GOLF_PLAETZE[golfPlatzEl.value];
+        var n = platz ? platz.loecher : 18;
         var pars = {};
         for (var h = 1; h <= n; h++) {
           var el = document.getElementById('par_' + h);
@@ -917,19 +1055,19 @@ app.get('/matches/new', requireUser, (req, res) => {
 
       function renderGolfScores() {
         if (golfEingabeEl.value !== 'loch') return;
-        const platz = GOLF_PLAETZE[golfPlatzEl.value];
-        const n = platz ? platz.loecher : 18;
-        const pars = getCurrentPars();
-        const players = Array.from(document.querySelectorAll('.side-card'));
+        var platz = GOLF_PLAETZE[golfPlatzEl.value];
+        var n = platz ? platz.loecher : 18;
+        var pars = getCurrentPars();
+        var players = Array.from(document.querySelectorAll('.side-card'));
         golfScoresGrid.innerHTML = '';
         players.forEach(function(card) {
-          const sid = card.dataset.sideId;
-          const nameEl = card.querySelector('[name="side_name_' + sid + '"]');
-          const pname = nameEl ? nameEl.value : ('Spieler ' + sid);
+          var sid = card.dataset.sideId;
+          var nameEl = card.querySelector('[name="side_name_' + sid + '"]');
+          var pname = nameEl && nameEl.value ? nameEl.value : ('Spieler ' + sid);
           var html = '<div style="margin-bottom:12px;">'
-            + '<div style="font-weight:600;color:var(--blue);font-size:13px;margin-bottom:6px;">⛳ ' + escapeAttr(pname) + '</div>';
+            + '<div style="font-weight:600;color:var(--gold);font-size:13px;margin-bottom:6px;">' + escapeAttr(pname) + '</div>';
           if (n > 9) {
-            ['OUT (1–9)', 'IN (10–' + n + ')'].forEach(function(lbl, half) {
+            ['OUT (1-9)', 'IN (10-' + n + ')'].forEach(function(lbl, half) {
               html += '<div style="font-size:11px;color:var(--muted);margin-bottom:3px">' + lbl + '</div>';
               html += '<div style="display:grid;grid-template-columns:repeat(9,1fr);gap:3px;margin-bottom:6px;">';
               var start = half === 0 ? 1 : 10;
@@ -962,7 +1100,7 @@ app.get('/matches/new', requireUser, (req, res) => {
       }
 
       function updateGolfTotal(sid, n) {
-        const pars = getCurrentPars();
+        var pars = getCurrentPars();
         var total = 0; var parTotal = 0;
         for (var h = 1; h <= n; h++) {
           var el = document.getElementById('loch_' + sid + '_' + h);
@@ -972,44 +1110,43 @@ app.get('/matches/new', requireUser, (req, res) => {
         var col = diff > 0 ? '#ef4444' : (diff < 0 ? '#22c55e' : 'var(--gold)');
         var el2 = document.getElementById('golf-total-' + sid);
         if (el2) el2.innerHTML = '<span style="color:' + col + '">Total: ' + total + ' (' + (diff >= 0 ? '+' : '') + diff + ')</span>';
-        // update hidden score
         var scoreEl = document.querySelector('[name="side_score_' + sid + '"]');
         if (scoreEl) scoreEl.value = total;
       }
 
       function updateLochSection() {
-        const show = isGolf() && golfEingabeEl.value === 'loch';
+        var show = isGolf() && golfEingabeEl.value === 'loch';
         golfLochSec.style.display = show ? 'block' : 'none';
         if (show) { renderParGrid(); renderGolfScores(); }
       }
 
       function collectSides() {
         return Array.from(document.querySelectorAll('.side-card')).map(function(card) {
-          const sid = card.dataset.sideId;
-          var score;
-          if (isGolf() && golfEingabeEl.value === 'gesamt') {
-            var inp = card.querySelector('[name="side_score_' + sid + '"]');
-            score = inp ? inp.value : 0;
-          } else {
-            var inp = card.querySelector('[name="side_score_' + sid + '"]');
-            score = inp ? inp.value : 0;
-          }
+          var sid = card.dataset.sideId;
+          var scoreEl = card.querySelector('[name="side_score_' + sid + '"]');
+          var score = scoreEl ? scoreEl.value : 0;
+          var nameEl = card.querySelector('[name="side_name_' + sid + '"]');
+          var sideName = nameEl && nameEl.value.trim() ? nameEl.value.trim() : (nameEl ? nameEl.placeholder : ('Spieler ' + sid));
+          var rbEl = card.querySelector('[name="side_restbecher_' + sid + '"]');
+          var vlEl = card.querySelector('[name="side_verlaengerungen_' + sid + '"]');
           return {
-            sideName: card.querySelector('[name="side_name_' + sid + '"]').value.trim(),
+            sideName: sideName,
             score: score,
-            profileIds: Array.from(card.querySelectorAll('[name="side_players_' + sid + '"]:checked')).map(function(i){ return Number(i.value); })
+            profileIds: Array.from(card.querySelectorAll('.profile-btn.selected')).map(function(b){ return Number(b.dataset.profileId); }),
+            restbecher: rbEl && rbEl.value !== '' ? Number(rbEl.value) : null,
+            verlaengerungen: vlEl && vlEl.value !== '' ? Number(vlEl.value) : null
           };
         });
       }
 
       function collectLochData() {
         if (!isGolf() || golfEingabeEl.value !== 'loch') return {};
-        const platz = GOLF_PLAETZE[golfPlatzEl.value];
-        const n = platz ? platz.loecher : 18;
-        const pars = getCurrentPars();
+        var platz = GOLF_PLAETZE[golfPlatzEl.value];
+        var n = platz ? platz.loecher : 18;
+        var pars = getCurrentPars();
         var result = {};
         Array.from(document.querySelectorAll('.side-card')).forEach(function(card) {
-          const sid = card.dataset.sideId;
+          var sid = card.dataset.sideId;
           var lochDetails = {};
           for (var h = 1; h <= n; h++) {
             var el = document.getElementById('loch_' + sid + '_' + h);
@@ -1020,12 +1157,15 @@ app.get('/matches/new', requireUser, (req, res) => {
         return result;
       }
 
+      // --- Event Listeners ---
+
       gameTypeSelect.addEventListener('change', function() {
         updateGolfSection();
         sidesContainer.innerHTML = '';
         sideCounter = 0;
-        if (isGolf()) { addSide('Spieler 1'); addSide('Spieler 2'); }
-        else          { addSide('Team 1');    addSide('Team 2'); }
+        var lbl = sideLabel();
+        addSide(lbl + ' 1');
+        addSide(lbl + ' 2');
       });
 
       golfModusEl.addEventListener('change', updateModusInfo);
@@ -1034,14 +1174,14 @@ app.get('/matches/new', requireUser, (req, res) => {
         updateLochSection();
         if (isGolf() && golfEingabeEl.value === 'gesamt') {
           Array.from(document.querySelectorAll('.side-card')).forEach(function(card) {
-            const sid = card.dataset.sideId;
+            var sid = card.dataset.sideId;
             var scoreEl = card.querySelector('[name="side_score_' + sid + '"]');
             if (scoreEl && scoreEl.type === 'hidden') {
               scoreEl.type = 'number';
-              scoreEl.placeholder = 'Gesamtschläge';
+              scoreEl.placeholder = 'Gesamtschl\\u00e4ge';
               scoreEl.removeAttribute('class');
               var lbl = document.createElement('label');
-              lbl.textContent = 'Gesamtschläge';
+              lbl.textContent = 'Gesamtschl\\u00e4ge';
               scoreEl.parentNode.insertBefore(lbl, scoreEl);
             }
           });
@@ -1054,11 +1194,43 @@ app.get('/matches/new', requireUser, (req, res) => {
         if (isGolf() && golfEingabeEl.value === 'loch') renderGolfScores();
       });
 
+      // Profile button toggle
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.profile-btn');
+        if (btn) { btn.classList.toggle('selected'); return; }
+      });
+
+      // Winner toggle (billard/capsen)
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.winner-toggle');
+        if (!btn) return;
+        var sid = btn.dataset.sid;
+        var val = Number(btn.dataset.val);
+        var card = btn.closest('.side-card');
+        var hidden = card.querySelector('.winner-hidden');
+        if (hidden) hidden.value = val;
+        // Highlight selected
+        card.querySelectorAll('.winner-toggle').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        // For billard/capsen: if marking as winner, set all other sides to loser
+        if (val === 1) {
+          Array.from(document.querySelectorAll('.side-card')).forEach(function(otherCard) {
+            if (otherCard === card) return;
+            var otherHidden = otherCard.querySelector('.winner-hidden');
+            if (otherHidden) otherHidden.value = '0';
+            otherCard.querySelectorAll('.winner-toggle').forEach(function(b) { b.classList.remove('active'); });
+            var loserBtn = otherCard.querySelector('.winner-toggle[data-val="0"]');
+            if (loserBtn) loserBtn.classList.add('active');
+          });
+        }
+      });
+
+      // Remove side
       document.addEventListener('click', function(event) {
-        const btn = event.target.closest('[data-remove-side]');
+        var btn = event.target.closest('[data-remove-side]');
         if (!btn) return;
         if (document.querySelectorAll('.side-card').length <= 2) {
-          window.alert('Mindestens zwei Spieler/Teams werden benötigt.');
+          window.alert('Mindestens zwei Spieler/Teams.');
           return;
         }
         btn.closest('.side-card').remove();
@@ -1068,7 +1240,7 @@ app.get('/matches/new', requireUser, (req, res) => {
       form.addEventListener('submit', function() {
         if (isGolf() && golfEingabeEl.value === 'loch') {
           Array.from(document.querySelectorAll('.side-card')).forEach(function(card) {
-            const sid = card.dataset.sideId;
+            var sid = card.dataset.sideId;
             updateGolfTotal(sid, GOLF_PLAETZE[golfPlatzEl.value] ? GOLF_PLAETZE[golfPlatzEl.value].loecher : 18);
           });
         }
@@ -1076,35 +1248,30 @@ app.get('/matches/new', requireUser, (req, res) => {
         lochInput.value   = JSON.stringify(collectLochData());
       });
 
+      // --- Init ---
       updateModusInfo();
-      // Initiale Teams ohne Golf-Check
       sideCounter = 0;
-      (function() {
-        var s1 = ++sideCounter;
-        var card1 = document.createElement('section');
-        card1.className = 'side-card';
-        card1.dataset.sideId = String(s1);
-        card1.innerHTML = [
-          '<div class="row"><h3>Team 1</h3>',
-          '<button class="ghost small" type="button" data-remove-side="' + s1 + '">Entfernen</button></div>',
-          '<label>Name<input type="text" name="side_name_' + s1 + '" value="Team 1" maxlength="40" required /></label>',
-          '<label>Score<input type="number" step="0.01" name="side_score_' + s1 + '" placeholder="z.B. 21" required /></label>',
-          '<div><div class="helper" style="margin-bottom:8px;">Profil</div><div class="checkbox-grid">' + renderProfileCheckboxes(s1) + '</div></div>'
-        ].join('');
-        sidesContainer.appendChild(card1);
-        var s2 = ++sideCounter;
-        var card2 = document.createElement('section');
-        card2.className = 'side-card';
-        card2.dataset.sideId = String(s2);
-        card2.innerHTML = [
-          '<div class="row"><h3>Team 2</h3>',
-          '<button class="ghost small" type="button" data-remove-side="' + s2 + '">Entfernen</button></div>',
-          '<label>Name<input type="text" name="side_name_' + s2 + '" value="Team 2" maxlength="40" required /></label>',
-          '<label>Score<input type="number" step="0.01" name="side_score_' + s2 + '" placeholder="z.B. 21" required /></label>',
-          '<div><div class="helper" style="margin-bottom:8px;">Profil</div><div class="checkbox-grid">' + renderProfileCheckboxes(s2) + '</div></div>'
-        ].join('');
-        sidesContainer.appendChild(card2);
-      })();
+
+      // If preselected game type, trigger change to build sides
+      if (gameTypeSelect.value) {
+        updateGolfSection();
+        var lbl = sideLabel();
+        addSide(lbl + ' 1');
+        addSide(lbl + ' 2');
+        // Pre-select profiles if provided
+        if (preP1) {
+          var btn1 = document.querySelector('.side-card[data-side-id="1"] .profile-btn[data-profile-id="' + preP1 + '"]');
+          if (btn1) btn1.classList.add('selected');
+        }
+        if (preP2) {
+          var btn2 = document.querySelector('.side-card[data-side-id="2"] .profile-btn[data-profile-id="' + preP2 + '"]');
+          if (btn2) btn2.classList.add('selected');
+        }
+      } else {
+        // Default: show two generic sides
+        addSide('Spieler 1');
+        addSide('Spieler 2');
+      }
     </script>
   `;
 
@@ -1156,7 +1323,17 @@ app.post('/matches', requireUser, upload.single('photo'), (req, res) => {
       usedProfileIds.add(profileId);
     }
 
-    normalizedSides.push({ sideName, score, profileIds });
+    normalizedSides.push({ sideName, score, profileIds, extraData: side.restbecher != null || side.verlaengerungen != null ? { restbecher: side.restbecher, verlaengerungen: side.verlaengerungen } : null });
+  }
+
+  // Validate winner-toggle games: exactly one winner
+  const gameTypeRow = db.prepare('SELECT slug FROM game_types WHERE id = ?').get(Number(req.body.gameTypeId));
+  if (gameTypeRow && (gameTypeRow.slug === 'billard' || gameTypeRow.slug === 'capsen')) {
+    const winnerCount = normalizedSides.filter(s => s.score === 1).length;
+    if (winnerCount !== 1) {
+      removeUploadedFile(req.file);
+      return redirectWithMessage(res, '/matches/new', 'Bitte genau einen Gewinner auswählen.');
+    }
   }
 
   const profilesFound = db.prepare(`SELECT id FROM profiles WHERE id IN (${normalizedSides.flatMap((s) => s.profileIds).map(() => '?').join(',')})`).all(...normalizedSides.flatMap((s) => s.profileIds));
@@ -1169,7 +1346,7 @@ app.post('/matches', requireUser, upload.single('photo'), (req, res) => {
   const bestScore = gameType.scoringMode === 'lower_wins' ? Math.min(...scores) : Math.max(...scores);
 
   const insertMatch = db.prepare(`INSERT INTO matches (game_type_id, played_at, notes, photo_path, created_by_profile_id) VALUES (?, ?, ?, ?, ?)`);
-  const insertSide = db.prepare(`INSERT INTO match_sides (match_id, side_name, score, is_winner) VALUES (?, ?, ?, ?)`);
+  const insertSide = db.prepare(`INSERT INTO match_sides (match_id, side_name, score, is_winner, extra_data) VALUES (?, ?, ?, ?, ?)`);
   const insertSideMember = db.prepare('INSERT INTO match_side_members (side_id, profile_id) VALUES (?, ?)');
 
   const saveMatch = db.transaction(() => {
@@ -1182,7 +1359,11 @@ app.post('/matches', requireUser, upload.single('photo'), (req, res) => {
       req.currentUser.id
     );
     for (const side of normalizedSides) {
-      const sideResult = insertSide.run(result.lastInsertRowid, side.sideName, side.score, side.score === bestScore ? 1 : 0);
+      const sideResult = insertSide.run(
+        result.lastInsertRowid, side.sideName, side.score,
+        side.score === bestScore ? 1 : 0,
+        side.extraData ? JSON.stringify(side.extraData) : null
+      );
       for (const profileId of side.profileIds) {
         insertSideMember.run(sideResult.lastInsertRowid, profileId);
       }
